@@ -1,55 +1,43 @@
+use std::env;
+
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_ws::{Message, Session};
 use futures_util::StreamExt;
 use log::{error, info};
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 
-async fn spawn_nushell() -> Result<(ChildStdin, BufReader<ChildStdout>), Box<dyn std::error::Error>>
-{
-    let mut child = Command::new("nu")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()?;
+async fn execute_nushell_command(command: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("nu").arg("-c").arg(command).output().await?;
 
-    let stdin = child.stdin.take().ok_or("Failed to open stdin")?;
-    let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
-    let reader = BufReader::new(stdout);
-
-    Ok((stdin, reader))
-}
-
-async fn handle_ws_message(
-    msg: String,
-    mut nushell_stdin: ChildStdin,
-    mut nushell_stdout: BufReader<ChildStdout>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    // Write the command to Nushell
-    nushell_stdin.write_all(msg.as_bytes()).await?;
-    nushell_stdin.write_all(b"\n").await?;
-    nushell_stdin.flush().await?;
-
-    // Read the output from Nushell
-    let mut output = String::new();
-    nushell_stdout.read_line(&mut output).await?;
-
-    Ok(output)
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(format!("Nushell error: {}", String::from_utf8_lossy(&output.stderr)).into())
+    }
 }
 
 async fn ws_handler(req: HttpRequest, body: web::Payload) -> Result<HttpResponse, Error> {
     // Initiate the WebSocket handshake
     let (response, mut session, mut msg_stream) = actix_ws::handle(&req, body)?;
 
-    // Spawn a task to handle incoming messages
     actix_web::rt::spawn(async move {
         while let Some(Ok(msg)) = msg_stream.next().await {
             match msg {
                 Message::Text(text) => {
                     info!("Received text message: {}", text);
-                    if let Err(e) = session.text(format!("Echo: {}", text)).await {
-                        error!("Error sending message: {}", e);
-                        break;
+                    match execute_nushell_command(&text).await {
+                        Ok(output) => {
+                            if let Err(e) = session.text(output).await {
+                                error!("Error sending message: {}", e);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error handling message: {}", e);
+                            break;
+                        }
                     }
                 }
                 Message::Binary(bin) => {
@@ -84,12 +72,12 @@ async fn ws_handler(req: HttpRequest, body: web::Payload) -> Result<HttpResponse
         }
     });
 
-    // Return the response to establish the WebSocket connection
     Ok(response)
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    env::set_var("RUST_LOG", "info");
     env_logger::init();
 
     println!("Starting WebSocket server at ws://127.0.0.1:8080/ws/");
@@ -99,3 +87,4 @@ async fn main() -> std::io::Result<()> {
         .run()
         .await
 }
+
