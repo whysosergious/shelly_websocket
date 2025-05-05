@@ -1,75 +1,14 @@
-use std::{env, path::PathBuf};
+use std::env;
 
-use actix_web::{get, web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
-use actix_ws::{Message, Session};
-use futures_util::StreamExt;
-use log::{error, info};
-
-use tokio::io::AsyncReadExt;
+use actix_web::{web, App, HttpServer};
 
 // local modules
 mod cmd;
 mod http;
+mod ws;
 
-use cmd::nu::execute_command;
 use http::routes::index;
-
-async fn ws_handler(req: HttpRequest, body: web::Payload) -> Result<HttpResponse, Error> {
-    // Initiate the WebSocket handshake
-    let (response, mut session, mut msg_stream) = actix_ws::handle(&req, body)?;
-
-    actix_web::rt::spawn(async move {
-        while let Some(Ok(msg)) = msg_stream.next().await {
-            match msg {
-                Message::Text(text) => {
-                    info!("Received text message: {}", text);
-                    match execute_command(&text).await {
-                        Ok(output) => {
-                            if let Err(e) = session.text(output).await {
-                                error!("Error sending message: {}", e);
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error handling message: {}", e);
-                            break;
-                        }
-                    }
-                }
-                Message::Binary(bin) => {
-                    info!("Received binary message: {:?}", bin);
-                    if let Err(e) = session.binary(bin).await {
-                        error!("Error sending binary message: {}", e);
-                        break;
-                    }
-                }
-                Message::Close(reason) => {
-                    info!("Received close message: {:?}", reason);
-                    let _ = session.close(reason).await;
-                    break;
-                }
-                Message::Ping(bytes) => {
-                    info!("Received ping: {:?}", bytes);
-                    if let Err(e) = session.pong(&bytes).await {
-                        error!("Error sending pong: {}", e);
-                        break;
-                    }
-                }
-                Message::Pong(_) => {
-                    info!("Received pong");
-                }
-                Message::Continuation(_) => {
-                    info!("Received continuation message");
-                }
-                Message::Nop => {
-                    info!("Received NOP");
-                }
-            }
-        }
-    });
-
-    Ok(response)
-}
+use ws::connection::handler;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -81,7 +20,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new()
             .service(index)
-            .route("/ws/", web::get().to(ws_handler))
+            .route("/ws/", web::get().to(handler))
     })
     .bind(("127.0.0.1", 8080))?
     .run()

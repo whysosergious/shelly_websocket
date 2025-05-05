@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use actix_files::NamedFile;
-use actix_web::{get, HttpResponse, Responder};
+use actix_web::{get, Responder};
 
 #[get("/")]
 async fn index() -> impl Responder {
