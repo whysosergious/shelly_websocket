@@ -1,6 +1,7 @@
-use std::env;
+use std::{env, path::PathBuf};
 
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_files::NamedFile;
+use actix_web::{get, web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_ws::{Message, Session};
 use futures_util::StreamExt;
 use log::{error, info};
@@ -8,7 +9,21 @@ use log::{error, info};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-async fn execute_nushell_command(command: &str) -> Result<String, Box<dyn std::error::Error>> {
+#[get("/")]
+async fn index() -> impl Responder {
+    let mut path = PathBuf::from("index.html");
+    if !path.exists() {
+        path = PathBuf::from("mod.html");
+    }
+
+    NamedFile::open_async(path).await
+}
+
+/// spawn a process to execute shell command
+async fn execute_command(command: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // TODO: binary input/uotput
+    // TODO: look into keepalive for e.g. sqeel operations
+
     let output = Command::new("nu").arg("-c").arg(command).output().await?;
 
     if output.status.success() {
@@ -27,7 +42,7 @@ async fn ws_handler(req: HttpRequest, body: web::Payload) -> Result<HttpResponse
             match msg {
                 Message::Text(text) => {
                     info!("Received text message: {}", text);
-                    match execute_nushell_command(&text).await {
+                    match execute_command(&text).await {
                         Ok(output) => {
                             if let Err(e) = session.text(output).await {
                                 error!("Error sending message: {}", e);
@@ -82,9 +97,12 @@ async fn main() -> std::io::Result<()> {
 
     println!("Starting WebSocket server at ws://127.0.0.1:8080/ws/");
 
-    HttpServer::new(|| App::new().route("/ws/", web::get().to(ws_handler)))
-        .bind(("127.0.0.1", 8080))?
-        .run()
-        .await
+    HttpServer::new(|| {
+        App::new()
+            .service(index)
+            .route("/ws/", web::get().to(ws_handler))
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
 }
-
