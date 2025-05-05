@@ -1,37 +1,18 @@
 use std::{env, path::PathBuf};
 
-use actix_files::NamedFile;
 use actix_web::{get, web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_ws::{Message, Session};
 use futures_util::StreamExt;
 use log::{error, info};
 
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 
-#[get("/")]
-async fn index() -> impl Responder {
-    let mut path = PathBuf::from("index.html");
-    if !path.exists() {
-        path = PathBuf::from("mod.html");
-    }
+// local modules
+mod cmd;
+mod http;
 
-    NamedFile::open_async(path).await
-}
-
-/// spawn a process to execute shell command
-async fn execute_command(command: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // TODO: binary input/uotput
-    // TODO: look into keepalive for e.g. sqeel operations
-
-    let output = Command::new("nu").arg("-c").arg(command).output().await?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(format!("Nushell error: {}", String::from_utf8_lossy(&output.stderr)).into())
-    }
-}
+use cmd::nu::execute_command;
+use http::routes::index;
 
 async fn ws_handler(req: HttpRequest, body: web::Payload) -> Result<HttpResponse, Error> {
     // Initiate the WebSocket handshake
