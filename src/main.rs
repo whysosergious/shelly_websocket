@@ -7,7 +7,7 @@ mod cmd;
 mod http;
 mod ws;
 
-use http::routes::index;
+use http::routes::{configure, index};
 use ws::connection::handler;
 
 #[tokio::main]
@@ -19,6 +19,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
+            .configure(configure)
             .service(index)
             .route("/ws/", web::get().to(handler))
     })
